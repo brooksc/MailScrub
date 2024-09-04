@@ -198,7 +198,7 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
 
             # Add "MailScrubbed" label to the email after browser is closed
             label_body = {
-                'addLabelIds': [MailScrubbed_label_id],
+                'addLabelIds': [MailScrubbed_label_id] if MailScrubbed_label_id else [],
                 'removeLabelIds': []
             }
             service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
