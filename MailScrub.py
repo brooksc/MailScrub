@@ -128,34 +128,6 @@ def extract_domains_and_dates(messages):
             if domain not in domains_last_unsubscribed or domains_last_unsubscribed[domain] < date:
                 domains_last_unsubscribed[domain] = date
     return domains_last_unsubscribed
-    """Fetch emails from Gmail received in the specified number of days that are not MailScrubbed."""
-    now = datetime.now()
-    days_ago = (now - timedelta(days=days_to_fetch)).strftime('%Y/%m/%d')
-    logger.debug(f"Fetching emails from {days_ago} to {now.isoformat()}Z")
-    query = f'after:{days_ago} -label:MailScrubbed -label:stay-subscribed'
-    logger.debug(f"Sending query to Gmail API: {query}")
-
-    messages = []
-    next_page_token = None
-
-    while True:
-        results = service.users().messages().list(userId='me', q=query, maxResults=100, pageToken=next_page_token).execute()
-        messages.extend(results.get('messages', []))
-        next_page_token = results.get('nextPageToken')
-
-        if not next_page_token:
-            break
-
-    emails_fetched = len(messages)
-    logger.debug(f"Fetched {emails_fetched} emails")
-
-    if emails_fetched == 0:
-        logger.debug("Checking if there are any emails in the inbox...")
-        all_emails = service.users().messages().list(userId='me').execute()
-        all_emails_count = len(all_emails.get('messages', []))
-        logger.debug(f"Total emails in the inbox: {all_emails_count}")
-
-    return messages
 
 def find_unsubscribe_link(service, message_id):
     """Find the unsubscribe link in an email and log the email's from/subject."""
