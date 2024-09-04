@@ -186,7 +186,7 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                 logger.debug("Browser closed. Continuing with the next email.")
 
                 processed_domains.add(domain)
-                logger.debug(f"Added domain {domain} to processed domains.")
+                logger.debug(f"Added domain {domain} to MailScrubbed domains.")
 
             except Exception as e:
                 logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Error: {e}")
