@@ -244,7 +244,7 @@ if __name__ == '__main__':
 
     try:
         service = authenticate_google()
-        processed_label_id = get_label_id(service, 'processed')
+        processed_label_id = get_label_id(service, 'MailScrubbed')
         unsubscribe_emails(service, processed_label_id, args.n)
 
     except KeyboardInterrupt:
