@@ -29,7 +29,33 @@ logger = logging.getLogger(__name__)
 # Define the default number of days to fetch emails
 DEFAULT_DAYS_TO_FETCH = 7
 
+def create_label(service, label_name):
+    """Create a new Gmail label."""
+    try:
+        label = service.users().labels().create(userId='me', body={'name': label_name, 'labelListVisibility': 'labelShow', 'messageListVisibility': 'show'}).execute()
+        logger.info(f"Created new label '{label_name}' with ID: {label['id']}")
+        return label['id']
+    except Exception as e:
+        logger.error(f"Failed to create label '{label_name}'. Error: {e}")
+        return None
+
 def get_label_id(service, label_name):
+    label_id = None
+    try:
+        results = service.users().labels().list(userId='me').execute()
+        labels = results.get('labels', [])
+        for label in labels:
+            if label['name'].lower() == label_name.lower():
+                label_id = label['id']
+                break
+        if label_id is None:
+            logger.warning(f"Label '{label_name}' not found. Attempting to create it.")
+            label_id = create_label(service, label_name)
+        else:
+            logger.debug(f"Label '{label_name}' has ID: {label_id}")
+    except Exception as e:
+        logger.error(f"Failed to retrieve labels. Error: {e}")
+    return label_id
     """Retrieve the ID of a Gmail label by name."""
     label_id = None
     try:
