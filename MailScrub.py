@@ -26,52 +26,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logging.getLogger('googleapiclient').setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
-# Define the number of days to fetch emails
-DAYS_TO_FETCH = 7
-
-# Define the path for the config file
-CONFIG_FILE = os.path.expanduser('~/.gmail_unsubscribe')
-
-def load_config():
-    """Load the configuration from the config file."""
-    config = {'domains': set(), 'senders': set()}
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, 'r') as f:
-            for line in f:
-                key, value = line.strip().split(':', 1)
-                config[key] = set(value.split(','))
-    logger.debug(f"Loaded config: {config}")
-    return config
-
-def save_config(config):
-    """Save the configuration to the config file."""
-    with open(CONFIG_FILE, 'w') as f:
-        for key, value in config.items():
-            f.write(f"{key}:{','.join(value)}\n")
-
-def edit_config(args):
-    """Edit the configuration based on command line arguments."""
-    config = load_config()
-    if args.domain:
-        config['domains'].update(args.domain)
-    if args.sender:
-        config['senders'].update(args.sender)
-    save_config(config)
-    logger.debug("Configuration updated and saved.")
-
-"""Authenticate with the Gmail API and return the service object."""
-creds = None
-if os.path.exists('token.pickle'):
-    with open('token.pickle', 'rb') as token:
-        creds = pickle.load(token)
-if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-        creds = flow.run_local_server(port=0)
-    with open('token.pickle', 'wb') as token:
-        pickle.dump(creds, token)
+# Define the default number of days to fetch emails
+DEFAULT_DAYS_TO_FETCH = 7
 
 def get_label_id(service, label_name):
     """Retrieve the ID of a Gmail label by name."""
@@ -91,12 +47,12 @@ def get_label_id(service, label_name):
         logger.error(f"Failed to retrieve labels. Error: {e}")
     return label_id
 
-def fetch_emails(service):
-    """Fetch emails from Gmail received in the last 7 days that are not processed."""
+def fetch_emails(service, days_to_fetch):
+    """Fetch emails from Gmail received in the specified number of days that are not MailScrubbed."""
     now = datetime.now()
-    days_ago = (now - timedelta(days=DAYS_TO_FETCH)).strftime('%Y/%m/%d')
+    days_ago = (now - timedelta(days=days_to_fetch)).strftime('%Y/%m/%d')
     logger.debug(f"Fetching emails from {days_ago} to {now.isoformat()}Z")
-    query = f'after:{days_ago} -label:processed -label:stay-subscribed'
+    query = f'after:{days_ago} -label:MailScrubbed -label:stay-subscribed'
     logger.debug(f"Sending query to Gmail API: {query}")
 
     messages = []
@@ -156,12 +112,39 @@ def authenticate_google():
             token.write(creds.to_json())
     return build('gmail', 'v1', credentials=creds)
 
-def unsubscribe_emails(service, processed_label_id, max_emails=None):
+def get_do_not_unsubscribe_list(service):
+    """Get the list of domains and senders to not unsubscribe from."""
+    do_not_unsubscribe_label_id = get_label_id(service, 'do-not-unsubscribe')
+    if not do_not_unsubscribe_label_id:
+        return set(), set()
+
+    query = f'label:do-not-unsubscribe'
+    results = service.users().messages().list(userId='me', q=query).execute()
+    messages = results.get('messages', [])
+
+    domains = set()
+    senders = set()
+
+    for message in messages:
+        msg = service.users().messages().get(userId='me', id=message['id']).execute()
+        headers = msg['payload']['headers']
+        from_header = next((header['value'] for header in headers if header['name'].lower() == 'from'), '')
+
+        if '@' in from_header:
+            domain = from_header.split('@')[-1].split('>')[0]
+            domains.add(domain)
+            sender = from_header.split('<')[0].strip()
+            senders.add(sender)
+
+    return domains, senders
+
+def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_fetch=DEFAULT_DAYS_TO_FETCH):
     """Unsubscribe from emails and log details about how we're unsubscribing."""
-    messages = fetch_emails(service)
+    messages = fetch_emails(service, days_to_fetch)
     processed_domains = set()
-    config = load_config()
-    logger.debug(f"Config loaded: {config}")
+    do_not_unsubscribe_domains, do_not_unsubscribe_senders = get_do_not_unsubscribe_list(service)
+    logger.debug(f"Do not unsubscribe domains: {do_not_unsubscribe_domains}")
+    logger.debug(f"Do not unsubscribe senders: {do_not_unsubscribe_senders}")
     emails_processed = 0
     for message in messages:
         message_id = message['id']
@@ -173,12 +156,12 @@ def unsubscribe_emails(service, processed_label_id, max_emails=None):
                 logger.debug(f"Skipping unsubscribe for domain {domain} as it has already been processed.")
                 continue
 
-            if domain in config['domains']:
-                logger.debug(f"Skipping unsubscribe for domain {domain} as it's in the skip list.")
+            if domain in do_not_unsubscribe_domains:
+                logger.debug(f"Skipping unsubscribe for domain {domain} as it's in the do-not-unsubscribe list.")
                 continue
 
-            if any(sender.lower() in from_email.lower() for sender in config['senders'] if sender):
-                logger.debug(f"Skipping unsubscribe for sender {from_email} as it's in the skip list.")
+            if any(sender.lower() in from_email.lower() for sender in do_not_unsubscribe_senders):
+                logger.debug(f"Skipping unsubscribe for sender {from_email} as it's in the do-not-unsubscribe list.")
                 continue
 
             logger.debug(f"Attempting to unsubscribe from email with ID: {message_id} using link: {unsubscribe_link}")
@@ -213,13 +196,13 @@ def unsubscribe_emails(service, processed_label_id, max_emails=None):
                 except:
                     pass
 
-            # Add "processed" label to the email after browser is closed
+            # Add "MailScrubbed" label to the email after browser is closed
             label_body = {
-                'addLabelIds': [processed_label_id],
+                'addLabelIds': [MailScrubbed_label_id],
                 'removeLabelIds': []
             }
             service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
-            logger.debug(f"Added 'processed' label to email with ID: {message_id}")
+            logger.debug(f"Added 'MailScrubbed' label to email with ID: {message_id}")
 
             emails_processed += 1
             if max_emails and emails_processed >= max_emails:
@@ -229,23 +212,17 @@ def unsubscribe_emails(service, processed_label_id, max_emails=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Gmail Unsubscribe Tool')
     parser.add_argument('-d', '--debug', action='store_true', help='Enable debug logging')
-    parser.add_argument('--domain', action='append', help='Add domain to ignore list')
-    parser.add_argument('--sender', action='append', help='Add sender email or name to ignore list')
     parser.add_argument('-n', type=int, help='Number of emails to process before exiting')
+    parser.add_argument('--days', type=int, default=DEFAULT_DAYS_TO_FETCH, help='Number of days to fetch emails for')
     args = parser.parse_args()
 
     if args.debug:
         logger.setLevel(logging.DEBUG)
 
-    if args.domain or args.sender:
-        edit_config(args)
-        logger.info("Configuration updated. Exiting.")
-        exit(0)
-
     try:
         service = authenticate_google()
-        processed_label_id = get_label_id(service, 'MailScrubbed')
-        unsubscribe_emails(service, processed_label_id, args.n)
+        MailScrubbed_label_id = get_label_id(service, 'MailScrubbed')
+        unsubscribe_emails(service, MailScrubbed_label_id, args.n, args.days)
 
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received. Saving state and exiting...")
