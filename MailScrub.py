@@ -73,7 +73,61 @@ def get_label_id(service, label_name):
         logger.error(f"Failed to retrieve labels. Error: {e}")
     return label_id
 
-def fetch_emails(service, days_to_fetch):
+def fetch_emails(service, days_to_fetch, MailScrubbed_label_id):
+    """Fetch emails from Gmail received in the specified number of days that are not MailScrubbed."""
+    now = datetime.now()
+    days_ago = (now - timedelta(days=days_to_fetch)).strftime('%Y/%m/%d')
+    logger.debug(f"Fetching emails from {days_ago} to {now.isoformat()}Z")
+    query = f'after:{days_ago} -label:MailScrubbed -label:stay-subscribed'
+    logger.debug(f"Sending query to Gmail API: {query}")
+
+    messages = []
+    next_page_token = None
+
+    while True:
+        results = service.users().messages().list(userId='me', q=query, maxResults=100, pageToken=next_page_token).execute()
+        messages.extend(results.get('messages', []))
+        next_page_token = results.get('nextPageToken')
+
+        if not next_page_token:
+            break
+
+    emails_fetched = len(messages)
+    logger.debug(f"Fetched {emails_fetched} emails")
+
+    if emails_fetched == 0:
+        logger.debug("Checking if there are any emails in the inbox...")
+        all_emails = service.users().messages().list(userId='me').execute()
+        all_emails_count = len(all_emails.get('messages', []))
+        logger.debug(f"Total emails in the inbox: {all_emails_count}")
+
+    # Fetch MailScrubbed emails to get domains and last unsubscribe dates
+    mailscrubbed_emails = fetch_mailscrubbed_emails(service, MailScrubbed_label_id)
+    domains_last_unsubscribed = extract_domains_and_dates(mailscrubbed_emails)
+
+    return messages, domains_last_unsubscribed
+
+def fetch_mailscrubbed_emails(service, MailScrubbed_label_id):
+    """Fetch all emails with the MailScrubbed label."""
+    query = f'label:{MailScrubbed_label_id}'
+    results = service.users().messages().list(userId='me', q=query).execute()
+    messages = results.get('messages', [])
+    return messages
+
+def extract_domains_and_dates(messages):
+    """Extract domains and last unsubscribe dates from MailScrubbed emails."""
+    domains_last_unsubscribed = {}
+    for message in messages:
+        msg = service.users().messages().get(userId='me', id=message['id']).execute()
+        headers = msg['payload']['headers']
+        from_header = next((header['value'] for header in headers if header['name'].lower() == 'from'), '')
+        date_header = next((header['value'] for header in headers if header['name'].lower() == 'date'), '')
+        if '@' in from_header:
+            domain = from_header.split('@')[-1].split('>')[0]
+            date = datetime.strptime(date_header, '%a, %d %b %Y %H:%M:%S %z')
+            if domain not in domains_last_unsubscribed or domains_last_unsubscribed[domain] < date:
+                domains_last_unsubscribed[domain] = date
+    return domains_last_unsubscribed
     """Fetch emails from Gmail received in the specified number of days that are not MailScrubbed."""
     now = datetime.now()
     days_ago = (now - timedelta(days=days_to_fetch)).strftime('%Y/%m/%d')
@@ -166,7 +220,7 @@ def get_do_not_unsubscribe_list(service):
 
 def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_fetch=DEFAULT_DAYS_TO_FETCH):
     """Unsubscribe from emails and log details about how we're unsubscribing."""
-    messages = fetch_emails(service, days_to_fetch)
+    messages, domains_last_unsubscribed = fetch_emails(service, days_to_fetch, MailScrubbed_label_id)
     processed_domains = set()
     do_not_unsubscribe_domains, do_not_unsubscribe_senders = get_do_not_unsubscribe_list(service)
     logger.debug(f"Do not unsubscribe domains: {do_not_unsubscribe_domains}")
@@ -178,7 +232,12 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
         if unsubscribe_link:
             domain = unsubscribe_link.split('/')[2]
 
-            if domain in processed_domains:
+            if domain in domains_last_unsubscribed:
+                last_unsubscribed_date = domains_last_unsubscribed[domain]
+                lookback_period = timedelta(days=2 * days_to_fetch)
+                if datetime.now() - last_unsubscribed_date < lookback_period:
+                    logger.debug(f"Skipping unsubscribe for domain {domain} as it was unsubscribed less than {lookback_period.days} days ago.")
+                    continue
                 logger.debug(f"Skipping unsubscribe for domain {domain} as it has already been processed.")
                 continue
 
