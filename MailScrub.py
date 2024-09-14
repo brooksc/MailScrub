@@ -208,6 +208,7 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
     logger.debug(f"Do not unsubscribe domains: {do_not_unsubscribe_domains}")
     logger.debug(f"Do not unsubscribe senders: {do_not_unsubscribe_senders}")
     emails_processed = 0
+    to_email = 'your_email@example.com'  # Define the to_email variable here
     for message in messages:
         message_id = message['id']
         unsubscribe_link, from_email, to_email = find_unsubscribe_link(service, message_id, to_email)
