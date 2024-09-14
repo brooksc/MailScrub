@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 import base64
 import os
-import os.path
 import pickle
 import re
 import logging
 import time
 import argparse
+import requests
+import json
+import ast
+from datetime import datetime, timedelta
+
 from playwright.sync_api import sync_playwright
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from datetime import datetime, timedelta
 
 # Function to save browser actions to a pickle file
 def save_browser_actions(url, actions):
     with open('browser-actions.pickle', 'ab') as f:
         pickle.dump({'url': url, 'actions': actions}, f)
 
-# Feature flag to control browser control code
-ENABLE_BROWSER_CONTROL = False
-
-# If modifying these SCOPES, delete the file token.pickle.
+# If modifying these SCOPES, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
 # Configure logging
@@ -36,7 +36,10 @@ DEFAULT_DAYS_TO_FETCH = 7
 def create_label(service, label_name):
     """Create a new Gmail label."""
     try:
-        label = service.users().labels().create(userId='me', body={'name': label_name, 'labelListVisibility': 'labelShow', 'messageListVisibility': 'show'}).execute()
+        label = service.users().labels().create(
+            userId='me',
+            body={'name': label_name, 'labelListVisibility': 'labelShow', 'messageListVisibility': 'show'}
+        ).execute()
         logger.info(f"Created new label '{label_name}' with ID: {label['id']}")
         return label['id']
     except Exception as e:
@@ -44,6 +47,7 @@ def create_label(service, label_name):
         return None
 
 def get_label_id(service, label_name):
+    """Retrieve the ID of a Gmail label by name, creating it if it doesn't exist."""
     label_id = None
     try:
         results = service.users().labels().list(userId='me').execute()
@@ -60,24 +64,8 @@ def get_label_id(service, label_name):
     except Exception as e:
         logger.error(f"Failed to retrieve labels. Error: {e}")
     return label_id
-    """Retrieve the ID of a Gmail label by name."""
-    label_id = None
-    try:
-        results = service.users().labels().list(userId='me').execute()
-        labels = results.get('labels', [])
-        for label in labels:
-            if label['name'].lower() == label_name.lower():
-                label_id = label['id']
-                break
-        if label_id is None:
-            logger.error(f"Label '{label_name}' not found.")
-        else:
-            logger.debug(f"Label '{label_name}' has ID: {label_id}")
-    except Exception as e:
-        logger.error(f"Failed to retrieve labels. Error: {e}")
-    return label_id
 
-def fetch_emails(service, days_to_fetch, MailScrubbed_label_id):
+def fetch_emails(service, days_to_fetch, mailscrubbed_label_id):
     """Fetch emails from Gmail received in the specified number of days that are not MailScrubbed."""
     now = datetime.now()
     days_ago = (now - timedelta(days=days_to_fetch)).strftime('%Y/%m/%d')
@@ -89,7 +77,9 @@ def fetch_emails(service, days_to_fetch, MailScrubbed_label_id):
     next_page_token = None
 
     while True:
-        results = service.users().messages().list(userId='me', q=query, maxResults=100, pageToken=next_page_token).execute()
+        results = service.users().messages().list(
+            userId='me', q=query, maxResults=100, pageToken=next_page_token
+        ).execute()
         messages.extend(results.get('messages', []))
         next_page_token = results.get('nextPageToken')
 
@@ -106,51 +96,71 @@ def fetch_emails(service, days_to_fetch, MailScrubbed_label_id):
         logger.debug(f"Total emails in the inbox: {all_emails_count}")
 
     # Fetch MailScrubbed emails to get domains and last unsubscribe dates
-    mailscrubbed_emails = fetch_mailscrubbed_emails(service, MailScrubbed_label_id)
-    domains_last_unsubscribed = extract_domains_and_dates(mailscrubbed_emails)
+    mailscrubbed_emails = fetch_mailscrubbed_emails(service, mailscrubbed_label_id)
+    domains_last_unsubscribed = extract_domains_and_dates(service, mailscrubbed_emails)
 
     return messages, domains_last_unsubscribed
 
-def fetch_mailscrubbed_emails(service, MailScrubbed_label_id):
+def fetch_mailscrubbed_emails(service, mailscrubbed_label_id):
     """Fetch all emails with the MailScrubbed label."""
-    query = f'label:{MailScrubbed_label_id}'
+    query = f'label:{mailscrubbed_label_id}'
     results = service.users().messages().list(userId='me', q=query).execute()
     messages = results.get('messages', [])
     return messages
 
-def extract_domains_and_dates(messages):
+def extract_domains_and_dates(service, messages):
     """Extract domains and last unsubscribe dates from MailScrubbed emails."""
     domains_last_unsubscribed = {}
     for message in messages:
         msg = service.users().messages().get(userId='me', id=message['id']).execute()
-        headers = msg['payload']['headers']
+        headers = msg['payload'].get('headers', [])
         from_header = next((header['value'] for header in headers if header['name'].lower() == 'from'), '')
         date_header = next((header['value'] for header in headers if header['name'].lower() == 'date'), '')
-        if '@' in from_header:
+        if '@' in from_header and date_header:
             domain = from_header.split('@')[-1].split('>')[0]
-            date = datetime.strptime(date_header, '%a, %d %b %Y %H:%M:%S %z')
+            try:
+                date = datetime.strptime(date_header, '%a, %d %b %Y %H:%M:%S %z')
+            except ValueError:
+                logger.error(f"Failed to parse date: {date_header}")
+                continue
             if domain not in domains_last_unsubscribed or domains_last_unsubscribed[domain] < date:
                 domains_last_unsubscribed[domain] = date
     return domains_last_unsubscribed
 
-def find_unsubscribe_link(service, message_id, to_email):
+def find_unsubscribe_link(service, message_id):
     """Find the unsubscribe link in an email and log the email's from/subject."""
-    message = service.users().messages().get(userId='me', id=message_id).execute()
-    headers = message['payload']['headers']
+    message = service.users().messages().get(userId='me', id=message_id, format='full').execute()
+    headers = message['payload'].get('headers', [])
     from_email = next((header['value'] for header in headers if header['name'] == 'From'), 'Unknown')
     subject = next((header['value'] for header in headers if header['name'] == 'Subject'), 'Unknown')
+    to_email = next((header['value'] for header in headers if header['name'] == 'Delivered-To'), 'your_actual_email@example.com')
 
     payload = message['payload']
-    if 'parts' in payload:
-        for part in payload['parts']:
-            if part['mimeType'] == 'text/html':
-                body = part['body']['data']
-                decoded_body = base64.urlsafe_b64decode(body).decode('utf-8')
-                unsubscribe_link = re.search(r'(?i)<a[^>]*href=["\']([^"\']*)["\'][^>]*>(?:unsubscribe|opt.?out)</a>', decoded_body)
-                if unsubscribe_link:
-                    logger.debug(f"Found unsubscribe link for email from: {from_email}, Subject: {subject}")
-                    return unsubscribe_link.group(1), from_email, to_email
-    return None, from_email, to_email
+    parts = payload.get('parts', [])
+    body = ''
+
+    # Extract the email body
+    for part in parts:
+        if part['mimeType'] == 'text/html':
+            body = part['body']['data']
+            break
+        elif 'parts' in part:
+            for subpart in part['parts']:
+                if subpart['mimeType'] == 'text/html':
+                    body = subpart['body']['data']
+                    break
+
+    if body:
+        decoded_body = base64.urlsafe_b64decode(body + '==').decode('utf-8', errors='ignore')
+        unsubscribe_link = re.search(
+            r'(?i)<a[^>]*href=["\']([^"\']*)["\'][^>]*>(?:unsubscribe|opt.?out)</a>',
+            decoded_body
+        )
+        if unsubscribe_link:
+            logger.debug(f"Found unsubscribe link for email from: {from_email}, Subject: {subject}")
+            return unsubscribe_link.group(1), from_email, to_email, decoded_body
+
+    return None, from_email, to_email, ''
 
 def authenticate_google():
     """Authenticate with the Gmail API and return the service object."""
@@ -193,7 +203,7 @@ def get_do_not_unsubscribe_list(service):
 
     for message in messages:
         msg = service.users().messages().get(userId='me', id=message['id']).execute()
-        headers = msg['payload']['headers']
+        headers = msg['payload'].get('headers', [])
         from_header = next((header['value'] for header in headers if header['name'].lower() == 'from'), '')
 
         if '@' in from_header:
@@ -204,18 +214,49 @@ def get_do_not_unsubscribe_list(service):
 
     return domains, senders
 
-def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_fetch=DEFAULT_DAYS_TO_FETCH):
+def send_to_ollama(prompt):
+    """Send a prompt to the local Ollama instance and return the response."""
+    url = 'http://localhost:11434/generate'  # Default Ollama endpoint
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        'model': 'llama3.1',
+        'prompt': prompt
+    }
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(data), stream=True)
+        response_text = ''
+        for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+            if chunk:
+                response_text += chunk
+        return response_text
+    except Exception as e:
+        logger.error(f"Failed to communicate with Ollama: {e}")
+        return ''
+
+def execute_ai_generated_code(page, code):
+    """Execute AI-generated code safely."""
+    # We will use ast.literal_eval to parse code into a Python object.
+    # For safety, we'll restrict the execution environment.
+    allowed_builtins = {'__builtins__': None}
+    exec_globals = {'page': page}
+    exec_locals = {}
+    try:
+        exec(code, exec_globals, exec_locals)
+    except Exception as e:
+        logger.error(f"Error executing AI-generated code: {e}")
+
+def unsubscribe_emails(service, mailscrubbed_label_id, max_emails=None, days_to_fetch=DEFAULT_DAYS_TO_FETCH):
     """Unsubscribe from emails and log details about how we're unsubscribing."""
-    messages, domains_last_unsubscribed = fetch_emails(service, days_to_fetch, MailScrubbed_label_id)
+    messages, domains_last_unsubscribed = fetch_emails(service, days_to_fetch, mailscrubbed_label_id)
     processed_domains = set()
     do_not_unsubscribe_domains, do_not_unsubscribe_senders = get_do_not_unsubscribe_list(service)
     logger.debug(f"Do not unsubscribe domains: {do_not_unsubscribe_domains}")
     logger.debug(f"Do not unsubscribe senders: {do_not_unsubscribe_senders}")
     emails_processed = 0
-    to_email = 'your_actual_email@example.com'  # Define the to_email variable here
+
     for message in messages:
         message_id = message['id']
-        unsubscribe_link, from_email, to_email = find_unsubscribe_link(service, message_id, to_email)
+        unsubscribe_link, from_email, to_email, email_body = find_unsubscribe_link(service, message_id)
         if unsubscribe_link:
             domain = unsubscribe_link.split('/')[2]
 
@@ -225,8 +266,6 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                 if datetime.now() - last_unsubscribed_date < lookback_period:
                     logger.debug(f"Skipping unsubscribe for domain {domain} as it was unsubscribed less than {lookback_period.days} days ago.")
                     continue
-                logger.debug(f"Skipping unsubscribe for domain {domain} as it has already been processed.")
-                continue
 
             if domain in do_not_unsubscribe_domains:
                 logger.debug(f"Skipping unsubscribe for domain {domain} as it's in the do-not-unsubscribe list.")
@@ -238,101 +277,106 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
 
             logger.debug(f"Attempting to unsubscribe from email with ID: {message_id} using link: {unsubscribe_link}")
 
-            if ENABLE_BROWSER_CONTROL:
-                # Initialize Playwright
-                logger.debug("Initializing Playwright...")
-                with sync_playwright() as p:
-                    browser = p.chromium.launch(headless=False)
-                    page = browser.new_page()
-                    logger.debug("Playwright initialized successfully.")
-                    time.sleep(5)  # Wait for 5 seconds to give the user a chance to navigate if required
+            # Initialize Playwright
+            logger.debug("Initializing Playwright...")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=False)
+                page = browser.new_page()
+                logger.debug("Playwright initialized successfully.")
+                time.sleep(2)  # Wait for 2 seconds to ensure page is ready
 
-                    # Capture user interactions
-                    user_actions = []
-                    page.on("click", lambda e: user_actions.append(f"Clicked: {e.target.textContent}"))
-                    page.on("keydown", lambda e: user_actions.append(f"Keydown: {e.key}"))
-                    page.on("input", lambda e: user_actions.append(f"Input: {e.target.value}"))
+                # Capture user interactions
+                user_actions = []
 
-                    try:
-                        logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
-                        logger.debug(f"Email was sent to: {to_email}")
-                        page.goto(unsubscribe_link, wait_until='networkidle')
+                try:
+                    logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
+                    logger.debug(f"Email was sent to: {to_email}")
+                    page.goto(unsubscribe_link, wait_until='networkidle')
 
-                        # Fuzzy matching for email input field
-                        try:
-                            try:
-                                email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email'], input[class*='email']", timeout=30000)
-                                if email_input:
-                                    email_input.fill(to_email)
-                                    logger.debug(f"Entered email address: {to_email}")
-                            except Exception as e:
-                                logger.error(f"Failed to find or fill email input field for email with ID: {message_id}. Selector used: 'input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email'], input[class*='email']'. Error: {e}")
-                                print("Please manually interact with the browser to complete the unsubscribe process. Once done, close the browser.")
-                                page.wait_for_event('close')
-                        except Exception as e:
-                            logger.error(f"Failed to find or fill email input field for email with ID: {message_id}. Selector used: 'input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email'], input[class*='email']'. Error: {e}")
+                    # Extract page content
+                    page_content = page.content()
+                    logger.debug("Extracted page content for AI processing.")
 
-                        # Wait for the "Unsubscribe from All" checkbox to be present
-                        try:
-                            unsubscribe_all_checkbox = page.wait_for_selector("input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all'], input[type='checkbox'][class*='unsubscribe'][class*='all']", timeout=25000)
-                            if unsubscribe_all_checkbox:
-                                unsubscribe_all_checkbox.check()
-                                logger.debug("Checked 'Unsubscribe from All' checkbox")
-                        except Exception as e:
-                            logger.error(f"Failed to find or check 'Unsubscribe from All' checkbox for email with ID: {message_id}. Selector used: 'input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all'], input[type='checkbox'][class*='unsubscribe'][class*='all']'. Error: {e}")
-                            print("Please manually interact with the browser to complete the unsubscribe process. Once done, close the browser.")
-                            page.wait_for_event('close')
+                    # Prepare prompt for Ollama
+                    prompt = f"""
+You are a web automation assistant. The goal is to unsubscribe from an email list using the given webpage content.
+Email: {to_email}
+Webpage content:
+{page_content}
 
-                        logger.debug("Waiting for browser to be closed...")
-                        browser.close()
-                        # Prompt user for input
-                        user_input = input("Please select an option:\n1) Unsubscribed\n2) Not unsubscribed\n3) Add to do-not-unsubscribe list\n")
+Provide Python Playwright code to perform the following steps:
+1. If the page indicates that the user is already unsubscribed, do nothing.
+2. If an email input field is present, fill it with the user's email.
+3. If a checkbox to 'Unsubscribe from All' is present, select it.
+4. Click the submit/unsubscribe button.
+5. Wait for any confirmation that the user has been unsubscribed.
 
-                        logger.debug("Browser closed. Continuing with the next email.")
+Return only the Python code that uses the 'page' object to perform these actions.
+"""
 
-                        # Log user actions to user-actions.txt and browser-actions.pickle if user confirmed unsubscribed
-                        if user_input == '1' and user_actions:
-                            with open("user-actions.txt", "a") as f:
-                                f.write(f"URL: {unsubscribe_link}\n")
-                                f.write(f"Actions: {', '.join(user_actions)}\n\n")
-                            save_browser_actions(unsubscribe_link, user_actions)
+                    # Send prompt to Ollama
+                    logger.debug("Sending prompt to Ollama for AI-generated code.")
+                    ai_response = send_to_ollama(prompt)
 
-                        processed_domains.add(domain)
-                        logger.debug(f"Added domain {domain} to MailScrubbed domains.")
+                    if ai_response:
+                        logger.debug("Received AI-generated code from Ollama.")
+                        # Execute the AI-generated code
+                        execute_ai_generated_code(page, ai_response)
+                        logger.debug("Executed AI-generated code.")
+                    else:
+                        logger.error("No response from Ollama. Cannot proceed with AI automation.")
 
-                    except Exception as e:
-                        logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Selector used: 'input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all'], input[type='checkbox'][class*='unsubscribe'][class*='all']'. Error: {e}")
+                    # Wait for any confirmation messages or page redirects
+                    time.sleep(2)
 
-                    # Prompt user for input
-                    user_input = input("Please select an option:\n1) Unsubscribed\n2) Not unsubscribed\n3) Add to do-not-unsubscribe list\n")
-                    if user_input == '1':
-                        # Add "MailScrubbed" label to the email
-                        label_body = {
-                            'addLabelIds': [MailScrubbed_label_id] if MailScrubbed_label_id else [],
-                            'removeLabelIds': []
-                        }
-                        service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
-                        logger.debug(f"Added 'MailScrubbed' label to email with ID: {message_id}")
-                    elif user_input == '2':
-                        # Skip the email and take no further action
-                        logger.debug(f"Skipping email with ID: {message_id}")
-                    elif user_input == '3':
-                        # Add the "do-not-unsubscribe" tag to the email
-                        do_not_unsubscribe_label_id = get_label_id(service, 'do-not-unsubscribe')
-                        if do_not_unsubscribe_label_id:
-                            label_body = {
-                                'addLabelIds': [do_not_unsubscribe_label_id],
-                                'removeLabelIds': []
-                            }
-                            service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
-                            logger.debug(f"Added 'do-not-unsubscribe' label to email with ID: {message_id}")
-                        else:
-                            logger.error("Failed to find or create 'do-not-unsubscribe' label.")
+                    # Check for confirmation text
+                    confirmation_text = page.inner_text('body')
+                    if re.search(r'unsubscribed|successfully unsubscribed|already unsubscribed', confirmation_text, re.IGNORECASE):
+                        logger.info("Successfully unsubscribed.")
+                    else:
+                        logger.warning("Unsubscribe may not have been successful. Manual check recommended.")
 
-                    emails_processed += 1
-                    if max_emails and emails_processed >= max_emails:
-                        logger.info(f"Reached maximum number of emails to process: {max_emails}")
-                        break
+                    browser.close()
+                    logger.debug("Browser closed. Continuing with the next email.")
+
+                    # Automatically label the email as 'MailScrubbed'
+                    process_user_input(service, message_id, '1', mailscrubbed_label_id)
+
+                except Exception as e:
+                    logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Error: {e}")
+                    browser.close()
+                    continue
+
+            emails_processed += 1
+            if max_emails and emails_processed >= max_emails:
+                logger.info(f"Reached maximum number of emails to process: {max_emails}")
+                break
+
+def process_user_input(service, message_id, user_input, mailscrubbed_label_id):
+    """Process user's input after attempting to unsubscribe."""
+    if user_input == '1':
+        # Add "MailScrubbed" label to the email
+        label_body = {
+            'addLabelIds': [mailscrubbed_label_id] if mailscrubbed_label_id else [],
+            'removeLabelIds': []
+        }
+        service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
+        logger.debug(f"Added 'MailScrubbed' label to email with ID: {message_id}")
+    elif user_input == '2':
+        # Skip the email and take no further action
+        logger.debug(f"Skipping email with ID: {message_id}")
+    elif user_input == '3':
+        # Add the "do-not-unsubscribe" tag to the email
+        do_not_unsubscribe_label_id = get_label_id(service, 'do-not-unsubscribe')
+        if do_not_unsubscribe_label_id:
+            label_body = {
+                'addLabelIds': [do_not_unsubscribe_label_id],
+                'removeLabelIds': []
+            }
+            service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
+            logger.debug(f"Added 'do-not-unsubscribe' label to email with ID: {message_id}")
+        else:
+            logger.error("Failed to find or create 'do-not-unsubscribe' label.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Gmail Unsubscribe Tool')
@@ -346,8 +390,8 @@ if __name__ == '__main__':
 
     try:
         service = authenticate_google()
-        MailScrubbed_label_id = get_label_id(service, 'MailScrubbed')
-        unsubscribe_emails(service, MailScrubbed_label_id, args.n, args.days)
+        mailscrubbed_label_id = get_label_id(service, 'MailScrubbed')
+        unsubscribe_emails(service, mailscrubbed_label_id, args.n, args.days)
 
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received. Saving state and exiting...")
