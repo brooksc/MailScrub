@@ -247,22 +247,32 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                 try:
                     logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
                     logger.debug(f"Email was sent to: {to_email}")
-                    page.goto(unsubscribe_link)
+                    page.goto(unsubscribe_link, wait_until='networkidle')
 
                     # Fuzzy matching for email input field
                     try:
-                        email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email'], input[class*='email']", timeout=30000)
-                        if email_input:
-                            email_input.fill(to_email)
-                            logger.debug(f"Entered email address: {to_email}")
+                        try:
+                            email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email'], input[class*='email']", timeout=30000)
+                            if email_input:
+                                email_input.fill(to_email)
+                                logger.debug(f"Entered email address: {to_email}")
+                        except Exception as e:
+                            logger.error(f"Failed to find or fill email input field for email with ID: {message_id}. Selector used: 'input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email'], input[class*='email']'. Error: {e}")
+                            print("Please manually interact with the browser to complete the unsubscribe process. Once done, close the browser.")
+                            page.wait_for_event('close')
                     except Exception as e:
                         logger.error(f"Failed to find or fill email input field for email with ID: {message_id}. Selector used: 'input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email'], input[class*='email']'. Error: {e}")
 
                     # Wait for the "Unsubscribe from All" checkbox to be present
-                    unsubscribe_all_checkbox = page.wait_for_selector("input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all'], input[type='checkbox'][class*='unsubscribe'][class*='all']", timeout=25000)
-                    if unsubscribe_all_checkbox:
-                        unsubscribe_all_checkbox.check()
-                        logger.debug("Checked 'Unsubscribe from All' checkbox")
+                    try:
+                        unsubscribe_all_checkbox = page.wait_for_selector("input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all'], input[type='checkbox'][class*='unsubscribe'][class*='all']", timeout=25000)
+                        if unsubscribe_all_checkbox:
+                            unsubscribe_all_checkbox.check()
+                            logger.debug("Checked 'Unsubscribe from All' checkbox")
+                    except Exception as e:
+                        logger.error(f"Failed to find or check 'Unsubscribe from All' checkbox for email with ID: {message_id}. Selector used: 'input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all'], input[type='checkbox'][class*='unsubscribe'][class*='all']'. Error: {e}")
+                        print("Please manually interact with the browser to complete the unsubscribe process. Once done, close the browser.")
+                        page.wait_for_event('close')
 
                     logger.debug("Waiting for browser to be closed...")
                     browser.close()
