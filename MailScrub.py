@@ -7,11 +7,7 @@ import re
 import logging
 import time
 import argparse
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from playwright.sync_api import sync_playwright
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -234,53 +230,39 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
 
             logger.debug(f"Attempting to unsubscribe from email with ID: {message_id} using link: {unsubscribe_link}")
 
-            # Initialize the WebDriver (assuming ChromeDriver is in PATH)
-            logger.debug("Initializing WebDriver...")
-            try:
-                driver = webdriver.Chrome()
-                logger.debug("WebDriver initialized successfully.")
-            except Exception as e:
-                logger.error(f"Failed to initialize WebDriver. Error: {e}")
-                continue
+            # Initialize Playwright
+            logger.debug("Initializing Playwright...")
+            with sync_playwright() as p:
+                browser = p.chromium.launch()
+                page = browser.new_page()
+                logger.debug("Playwright initialized successfully.")
 
-            try:
-                logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
-                logger.debug(f"Email was sent to: {to_email}")
-                driver.get(unsubscribe_link)
-
-                # Fuzzy matching for email input field
-                email_input = None
-                # Wait for the email input field to be present
-                email_input = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, "//input[contains(@placeholder, 'email') or contains(@name, 'email') or contains(@id, 'email')]"))
-                )
-                if email_input:
-                    email_input.send_keys(to_email)
-                    logger.debug(f"Entered email address: {to_email}")
-
-                # Wait for the "Unsubscribe from All" checkbox to be present
-                unsubscribe_all_checkbox = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, "//input[@type='checkbox' and contains(@id, 'unsubscribe') and contains(@id, 'all')]"))
-                )
-                if unsubscribe_all_checkbox:
-                    unsubscribe_all_checkbox.click()
-                    logger.debug("Checked 'Unsubscribe from All' checkbox")
-
-                logger.debug("Waiting for browser to be closed...")
-                while len(driver.window_handles) > 0:
-                    time.sleep(1)
-                logger.debug("Browser closed. Continuing with the next email.")
-
-                processed_domains.add(domain)
-                logger.debug(f"Added domain {domain} to MailScrubbed domains.")
-
-            except Exception as e:
-                logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Error: {e}")
-            finally:
                 try:
-                    driver.quit()
-                except:
-                    pass
+                    logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
+                    logger.debug(f"Email was sent to: {to_email}")
+                    page.goto(unsubscribe_link)
+
+                    # Fuzzy matching for email input field
+                    email_input = page.wait_for_selector("input[placeholder*='email'], input[name*='email'], input[id*='email']", timeout=10000)
+                    if email_input:
+                        email_input.fill(to_email)
+                        logger.debug(f"Entered email address: {to_email}")
+
+                    # Wait for the "Unsubscribe from All" checkbox to be present
+                    unsubscribe_all_checkbox = page.wait_for_selector("input[type='checkbox'][id*='unsubscribe'][id*='all']", timeout=10000)
+                    if unsubscribe_all_checkbox:
+                        unsubscribe_all_checkbox.check()
+                        logger.debug("Checked 'Unsubscribe from All' checkbox")
+
+                    logger.debug("Waiting for browser to be closed...")
+                    browser.close()
+                    logger.debug("Browser closed. Continuing with the next email.")
+
+                    processed_domains.add(domain)
+                    logger.debug(f"Added domain {domain} to MailScrubbed domains.")
+
+                except Exception as e:
+                    logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Error: {e}")
 
             # Add "MailScrubbed" label to the email after browser is closed
             label_body = {
