@@ -250,22 +250,18 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
 
                 # Fuzzy matching for email input field
                 email_input = None
-                for label in driver.find_elements(By.TAG_NAME, 'label'):
-                    if 'email' in label.text.lower():
-                        email_input = label.find_element(By.XPATH, './following-sibling::input')
-                        break
+                # Wait for the email input field to be present
+                email_input = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//input[contains(@placeholder, 'email') or contains(@name, 'email') or contains(@id, 'email')]"))
+                )
                 if email_input:
                     email_input.send_keys(to_email)
                     logger.debug(f"Entered email address: {to_email}")
 
-                # Fuzzy matching for "Unsubscribe from All" checkbox
-                unsubscribe_all_checkbox = None
-                for checkbox in driver.find_elements(By.TAG_NAME, 'input'):
-                    if checkbox.get_attribute('type') == 'checkbox':
-                        label = checkbox.find_element(By.XPATH, './following-sibling::label')
-                        if 'unsubscribe' in label.text.lower() and 'all' in label.text.lower():
-                            unsubscribe_all_checkbox = checkbox
-                            break
+                # Wait for the "Unsubscribe from All" checkbox to be present
+                unsubscribe_all_checkbox = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, "//input[@type='checkbox' and contains(@id, 'unsubscribe') and contains(@id, 'all')]"))
+                )
                 if unsubscribe_all_checkbox:
                     unsubscribe_all_checkbox.click()
                     logger.debug("Checked 'Unsubscribe from All' checkbox")
