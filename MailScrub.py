@@ -285,6 +285,9 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
 
                         logger.debug("Waiting for browser to be closed...")
                         browser.close()
+                        # Prompt user for input
+                        user_input = input("Please select an option:\n1) Unsubscribed\n2) Not unsubscribed\n3) Add to do-not-unsubscribe list\n")
+
                         logger.debug("Browser closed. Continuing with the next email.")
 
                         # Log user actions to user-actions.txt and browser-actions.pickle if user confirmed unsubscribed
