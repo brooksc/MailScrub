@@ -14,6 +14,11 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from datetime import datetime, timedelta
 
+# Function to save browser actions to a pickle file
+def save_browser_actions(url, actions):
+    with open('browser-actions.pickle', 'ab') as f:
+        pickle.dump({'url': url, 'actions': actions}, f)
+
 # Feature flag to control browser control code
 ENABLE_BROWSER_CONTROL = False
 
@@ -282,11 +287,12 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                         browser.close()
                         logger.debug("Browser closed. Continuing with the next email.")
 
-                        # Log user actions to user-actions.txt
-                        if user_actions:
+                        # Log user actions to user-actions.txt and browser-actions.pickle if user confirmed unsubscribed
+                        if user_input == '1' and user_actions:
                             with open("user-actions.txt", "a") as f:
                                 f.write(f"URL: {unsubscribe_link}\n")
                                 f.write(f"Actions: {', '.join(user_actions)}\n\n")
+                            save_browser_actions(unsubscribe_link, user_actions)
 
                         processed_domains.add(domain)
                         logger.debug(f"Added domain {domain} to MailScrubbed domains.")
