@@ -156,12 +156,23 @@ def authenticate_google():
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                if 'invalid_grant' in str(e):
+                    logger.warning("Token has been expired or revoked. Deleting token.json and re-authenticating.")
+                    os.remove('token.json')
+                    flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+                    creds = flow.run_local_server(port=0)
+                    with open('token.json', 'w') as token:
+                        token.write(creds.to_json())
+                else:
+                    raise e
         else:
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+            with open('token.json', 'w') as token:
+                token.write(creds.to_json())
     return build('gmail', 'v1', credentials=creds)
 
 def get_do_not_unsubscribe_list(service):
