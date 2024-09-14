@@ -244,15 +244,15 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
 
                     # Fuzzy matching for email input field
                     try:
-                        email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email']", timeout=15000)
+                        email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email']", timeout=20000)
                         if email_input:
                             email_input.fill(to_email)
                             logger.debug(f"Entered email address: {to_email}")
                     except Exception as e:
-                        logger.error(f"Failed to find or fill email input field for email with ID: {message_id}. Error: {e}")
+                        logger.error(f"Failed to find or fill email input field for email with ID: {message_id}. Selector used: 'input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email'], input[aria-label*='email']'. Error: {e}")
 
                     # Wait for the "Unsubscribe from All" checkbox to be present
-                    unsubscribe_all_checkbox = page.wait_for_selector("input[type='checkbox'][id*='unsubscribe'][id*='all']", timeout=10000)
+                    unsubscribe_all_checkbox = page.wait_for_selector("input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all']", timeout=15000)
                     if unsubscribe_all_checkbox:
                         unsubscribe_all_checkbox.check()
                         logger.debug("Checked 'Unsubscribe from All' checkbox")
@@ -265,7 +265,7 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                     logger.debug(f"Added domain {domain} to MailScrubbed domains.")
 
                 except Exception as e:
-                    logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Error: {e}")
+                    logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Selector used: 'input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all']'. Error: {e}")
 
             # Add "MailScrubbed" label to the email after browser is closed
             label_body = {
