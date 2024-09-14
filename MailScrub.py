@@ -129,13 +129,12 @@ def extract_domains_and_dates(messages):
                 domains_last_unsubscribed[domain] = date
     return domains_last_unsubscribed
 
-def find_unsubscribe_link(service, message_id):
+def find_unsubscribe_link(service, message_id, to_email):
     """Find the unsubscribe link in an email and log the email's from/subject."""
     message = service.users().messages().get(userId='me', id=message_id).execute()
     headers = message['payload']['headers']
     from_email = next((header['value'] for header in headers if header['name'] == 'From'), 'Unknown')
     subject = next((header['value'] for header in headers if header['name'] == 'Subject'), 'Unknown')
-    to_email = next((header['value'] for header in headers if header['name'] == 'To'), 'Unknown')
 
     payload = message['payload']
     if 'parts' in payload:
@@ -247,6 +246,28 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                 logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
                 logger.debug(f"Email was sent to: {to_email}")
                 driver.get(unsubscribe_link)
+
+                # Fuzzy matching for email input field
+                email_input = None
+                for label in driver.find_elements(By.TAG_NAME, 'label'):
+                    if 'email' in label.text.lower():
+                        email_input = label.find_element(By.XPATH, './following-sibling::input')
+                        break
+                if email_input:
+                    email_input.send_keys(to_email)
+                    logger.debug(f"Entered email address: {to_email}")
+
+                # Fuzzy matching for "Unsubscribe from All" checkbox
+                unsubscribe_all_checkbox = None
+                for checkbox in driver.find_elements(By.TAG_NAME, 'input'):
+                    if checkbox.get_attribute('type') == 'checkbox':
+                        label = checkbox.find_element(By.XPATH, './following-sibling::label')
+                        if 'unsubscribe' in label.text.lower() and 'all' in label.text.lower():
+                            unsubscribe_all_checkbox = checkbox
+                            break
+                if unsubscribe_all_checkbox:
+                    unsubscribe_all_checkbox.click()
+                    logger.debug("Checked 'Unsubscribe from All' checkbox")
 
                 logger.debug("Waiting for browser to be closed...")
                 while len(driver.window_handles) > 0:
