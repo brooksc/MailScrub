@@ -294,18 +294,36 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                     except Exception as e:
                         logger.error(f"Failed to navigate to unsubscribe link for email with ID: {message_id}. Selector used: 'input[type='checkbox'][id*='unsubscribe'][id*='all'], input[type='checkbox'][name*='unsubscribe'][name*='all'], input[type='checkbox'][aria-label*='unsubscribe'][aria-label*='all'], input[type='checkbox'][class*='unsubscribe'][class*='all']'. Error: {e}")
 
-                # Add "MailScrubbed" label to the email after browser is closed
-                label_body = {
-                    'addLabelIds': [MailScrubbed_label_id] if MailScrubbed_label_id else [],
-                    'removeLabelIds': []
-                }
-                service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
-                logger.debug(f"Added 'MailScrubbed' label to email with ID: {message_id}")
+                    # Prompt user for input
+                    user_input = input("Please select an option:\n1) Unsubscribed\n2) Not unsubscribed\n3) Add to do-not-unsubscribe list\n")
+                    if user_input == '1':
+                        # Add "MailScrubbed" label to the email
+                        label_body = {
+                            'addLabelIds': [MailScrubbed_label_id] if MailScrubbed_label_id else [],
+                            'removeLabelIds': []
+                        }
+                        service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
+                        logger.debug(f"Added 'MailScrubbed' label to email with ID: {message_id}")
+                    elif user_input == '2':
+                        # Skip the email and take no further action
+                        logger.debug(f"Skipping email with ID: {message_id}")
+                    elif user_input == '3':
+                        # Add the "do-not-unsubscribe" tag to the email
+                        do_not_unsubscribe_label_id = get_label_id(service, 'do-not-unsubscribe')
+                        if do_not_unsubscribe_label_id:
+                            label_body = {
+                                'addLabelIds': [do_not_unsubscribe_label_id],
+                                'removeLabelIds': []
+                            }
+                            service.users().messages().modify(userId='me', id=message_id, body=label_body).execute()
+                            logger.debug(f"Added 'do-not-unsubscribe' label to email with ID: {message_id}")
+                        else:
+                            logger.error("Failed to find or create 'do-not-unsubscribe' label.")
 
-                emails_processed += 1
-                if max_emails and emails_processed >= max_emails:
-                    logger.info(f"Reached maximum number of emails to process: {max_emails}")
-                    break
+                    emails_processed += 1
+                    if max_emails and emails_processed >= max_emails:
+                        logger.info(f"Reached maximum number of emails to process: {max_emails}")
+                        break
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Gmail Unsubscribe Tool')
