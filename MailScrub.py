@@ -243,10 +243,13 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                     page.goto(unsubscribe_link)
 
                     # Fuzzy matching for email input field
-                    email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email']", timeout=15000)
-                    if email_input:
-                        email_input.fill(to_email)
-                        logger.debug(f"Entered email address: {to_email}")
+                    try:
+                        email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email']", timeout=15000)
+                        if email_input:
+                            email_input.fill(to_email)
+                            logger.debug(f"Entered email address: {to_email}")
+                    except Exception as e:
+                        logger.error(f"Failed to find or fill email input field for email with ID: {message_id}. Error: {e}")
 
                     # Wait for the "Unsubscribe from All" checkbox to be present
                     unsubscribe_all_checkbox = page.wait_for_selector("input[type='checkbox'][id*='unsubscribe'][id*='all']", timeout=10000)
