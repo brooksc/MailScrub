@@ -210,7 +210,7 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
     emails_processed = 0
     for message in messages:
         message_id = message['id']
-        unsubscribe_link, from_email, to_email = find_unsubscribe_link(service, message_id)
+        unsubscribe_link, from_email, to_email = find_unsubscribe_link(service, message_id, to_email)
         if unsubscribe_link:
             domain = unsubscribe_link.split('/')[2]
 
