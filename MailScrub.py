@@ -233,9 +233,10 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
             # Initialize Playwright
             logger.debug("Initializing Playwright...")
             with sync_playwright() as p:
-                browser = p.chromium.launch()
+                browser = p.chromium.launch(headless=False)
                 page = browser.new_page()
                 logger.debug("Playwright initialized successfully.")
+                time.sleep(5)  # Wait for 5 seconds to give the user a chance to navigate if required
 
                 try:
                     logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
