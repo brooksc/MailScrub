@@ -243,7 +243,7 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                     page.goto(unsubscribe_link)
 
                     # Fuzzy matching for email input field
-                    email_input = page.wait_for_selector("input[placeholder*='email'], input[name*='email'], input[id*='email']", timeout=10000)
+                    email_input = page.wait_for_selector("input[type='email'], input[placeholder*='email'], input[name*='email'], input[id*='email']", timeout=15000)
                     if email_input:
                         email_input.fill(to_email)
                         logger.debug(f"Entered email address: {to_email}")
