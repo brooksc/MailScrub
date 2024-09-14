@@ -238,6 +238,12 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                 logger.debug("Playwright initialized successfully.")
                 time.sleep(5)  # Wait for 5 seconds to give the user a chance to navigate if required
 
+                # Capture user interactions
+                user_actions = []
+                page.on("click", lambda e: user_actions.append(f"Clicked: {e.target.textContent}"))
+                page.on("keydown", lambda e: user_actions.append(f"Keydown: {e.key}"))
+                page.on("input", lambda e: user_actions.append(f"Input: {e.target.value}"))
+
                 try:
                     logger.debug(f"Navigating to unsubscribe link: {unsubscribe_link}")
                     logger.debug(f"Email was sent to: {to_email}")
@@ -261,6 +267,12 @@ def unsubscribe_emails(service, MailScrubbed_label_id, max_emails=None, days_to_
                     logger.debug("Waiting for browser to be closed...")
                     browser.close()
                     logger.debug("Browser closed. Continuing with the next email.")
+
+                    # Log user actions to user-actions.txt
+                    if user_actions:
+                        with open("user-actions.txt", "a") as f:
+                            f.write(f"URL: {unsubscribe_link}\n")
+                            f.write(f"Actions: {', '.join(user_actions)}\n\n")
 
                     processed_domains.add(domain)
                     logger.debug(f"Added domain {domain} to MailScrubbed domains.")
