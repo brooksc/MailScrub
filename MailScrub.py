@@ -135,6 +135,18 @@ def find_unsubscribe_link(service, message_id):
     subject = next((header['value'] for header in headers if header['name'] == 'Subject'), 'Unknown')
     to_email = next((header['value'] for header in headers if header['name'] == 'Delivered-To'), 'your_actual_email@example.com')
 
+    # Check for List-Unsubscribe header
+    list_unsubscribe = next((header['value'] for header in headers if header['name'] == 'List-Unsubscribe'), None)
+    if list_unsubscribe:
+        http_link = re.search(r'(?i)<(https?://[^>]+)>', list_unsubscribe)
+        if http_link:
+            logger.info(f"Found HTTP/HTTPS unsubscribe link for email from: {from_email}, Subject: {subject}")
+            return http_link.group(1), from_email, to_email, ''
+        mailto_link = re.search(r'(?i)<mailto:([^>]+)>', list_unsubscribe)
+        if mailto_link:
+            logger.info(f"Found mailto unsubscribe link for email from: {from_email}, Subject: {subject}")
+            return mailto_link.group(1), from_email, to_email, ''
+
     payload = message['payload']
     parts = payload.get('parts', [])
     body = ''
