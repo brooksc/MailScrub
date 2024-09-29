@@ -260,8 +260,8 @@ def send_to_skyvern(url, to_email):
     data = {
         "url": url,
         "webhook_callback_url": "",
-        "navigation_goal": "Navigate through the website until you generate an auto insurance quote. Do not generate a home insurance quote. If this page contains an auto insurance quote, consider the goal achieved",
-        "data_extraction_goal": "Extract all quote information in JSON format including the premium amount, the timeframe for the quote.",
+        "navigation_goal": f"Open a page to unsubscribe to an email. If it's a login page, abort immediately. If you see a button to unsubscribe, click it. Prefer to unsubscribe from all vs. just a single email. Enter the appropriate email address ({to_email}). Click any buttons required to unsubscribe. You are done when it confirms you have unsubscribed.",
+        "data_extraction_goal": "Determine whether the unsubscription succeeded or failed.",
         "navigation_payload": to_email,
         "proxy_location": "NONE"
     }
