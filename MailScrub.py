@@ -245,6 +245,33 @@ def send_to_ollama(prompt):
         logger.error(f"Failed to communicate with Ollama: {e}")
         return ''
 
+def send_to_skyvern(url, to_email):
+    """Send a request to the Skyvern API for unsubscription automation."""
+    skyvern_api_key = os.getenv('SKYVERN_API_KEY')
+    if not skyvern_api_key:
+        logger.error("SKYVERN_API_KEY environment variable is not set.")
+        return
+
+    skyvern_url = 'http://0.0.0.0:8000/api/v1/tasks'
+    headers = {
+        'Content-Type': 'application/json',
+        'x-api-key': skyvern_api_key
+    }
+    data = {
+        "url": url,
+        "webhook_callback_url": "",
+        "navigation_goal": "Navigate through the website until you generate an auto insurance quote. Do not generate a home insurance quote. If this page contains an auto insurance quote, consider the goal achieved",
+        "data_extraction_goal": "Extract all quote information in JSON format including the premium amount, the timeframe for the quote.",
+        "navigation_payload": to_email,
+        "proxy_location": "NONE"
+    }
+    try:
+        response = requests.post(skyvern_url, headers=headers, data=json.dumps(data))
+        response.raise_for_status()
+        logger.info("Successfully sent request to Skyvern API.")
+    except Exception as e:
+        logger.error(f"Failed to communicate with Skyvern API: {e}")
+
 def execute_ai_generated_code(page, code):
     """Execute AI-generated code safely."""
     # We will use ast.literal_eval to parse code into a Python object.
@@ -289,7 +316,11 @@ def unsubscribe_emails(service, mailscrubbed_label_id, max_emails=None, days_to_
 
             logger.info(f"Attempting to unsubscribe from email with ID: {message_id} using link: {unsubscribe_link}")
 
-            if args.playwright:
+            if args.skyvern:
+                # Send request to Skyvern API
+                logger.info("Sending request to Skyvern API...")
+                send_to_skyvern(unsubscribe_link, to_email)
+            elif args.playwright:
                 # Initialize Playwright
                 logger.info("Initializing Playwright...")
                 with sync_playwright() as p:
@@ -400,6 +431,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', type=int, help='Number of emails to process before exiting')
     parser.add_argument('--days', type=int, default=DEFAULT_DAYS_TO_FETCH, help='Number of days to fetch emails for')
     parser.add_argument('--playwright', action='store_true', help='Enable Playwright for browser automation')
+    parser.add_argument('--skyvern', action='store_true', help='Enable Skyvern for unsubscription automation')
     args = parser.parse_args()
 
     if args.debug:
