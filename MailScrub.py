@@ -277,13 +277,17 @@ def unsubscribe_emails(service, mailscrubbed_label_id, max_emails=None, days_to_
 
             logger.debug(f"Attempting to unsubscribe from email with ID: {message_id} using link: {unsubscribe_link}")
 
-            # Initialize Playwright
-            logger.debug("Initializing Playwright...")
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=False)
-                page = browser.new_page()
-                logger.debug("Playwright initialized successfully.")
-                time.sleep(2)  # Wait for 2 seconds to ensure page is ready
+            if args.playwright:
+                # Initialize Playwright
+                logger.debug("Initializing Playwright...")
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=False)
+                    page = browser.new_page()
+                    logger.debug("Playwright initialized successfully.")
+                    time.sleep(2)  # Wait for 2 seconds to ensure page is ready
+            else:
+                logger.debug("Playwright is disabled. Skipping browser automation.")
+                continue
 
                 # Capture user interactions
                 user_actions = []
@@ -383,6 +387,7 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--debug', action='store_true', help='Enable debug logging')
     parser.add_argument('-n', type=int, help='Number of emails to process before exiting')
     parser.add_argument('--days', type=int, default=DEFAULT_DAYS_TO_FETCH, help='Number of days to fetch emails for')
+    parser.add_argument('--playwright', action='store_true', help='Enable Playwright for browser automation')
     args = parser.parse_args()
 
     if args.debug:
