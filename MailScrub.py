@@ -145,6 +145,7 @@ def find_unsubscribe_link(service, message_id):
         mailto_link = re.search(r'(?i)<mailto:([^>]+)>', list_unsubscribe)
         if mailto_link:
             logger.info(f"Found mailto unsubscribe link for email from: {from_email}, Subject: {subject}")
+            send_unsubscribe_email(mailto_link.group(1), to_email)
             return mailto_link.group(1), from_email, to_email, ''
 
     payload = message['payload']
@@ -244,6 +245,37 @@ def send_to_ollama(prompt):
     except Exception as e:
         logger.error(f"Failed to communicate with Ollama: {e}")
         return ''
+
+def send_unsubscribe_email(mailto_link, to_email):
+    """Send an unsubscribe email using the smtplib library."""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    # Gmail SMTP server settings
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+    smtp_user = 'your_email@gmail.com'
+    smtp_password = 'your_app_specific_password'
+
+    # Create the email message
+    msg = MIMEMultipart()
+    msg['From'] = smtp_user
+    msg['To'] = to_email
+    msg['Subject'] = 'Unsubscribe Request'
+
+    body = "Please unsubscribe me from your mailing list."
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        server.sendmail(smtp_user, to_email, msg.as_string())
+        server.quit()
+        logger.info(f"Successfully sent unsubscribe email to {to_email}")
+    except Exception as e:
+        logger.error(f"Failed to send unsubscribe email: {e}")
 
 def send_to_skyvern(url, to_email):
     """Send a request to the Skyvern API for unsubscription automation."""
