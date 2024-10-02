@@ -266,6 +266,7 @@ def send_to_skyvern(url, to_email):
         "proxy_location": "NONE"
     }
     try:
+        logger.debug(f"Sending payload to Skyvern API: {json.dumps(data, indent=2)}")
         response = requests.post(skyvern_url, headers=headers, data=json.dumps(data))
         response.raise_for_status()
         logger.info("Successfully sent request to Skyvern API.")
