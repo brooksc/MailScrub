@@ -143,7 +143,7 @@ def find_unsubscribe_link(service, message_id):
             logger.info(f"Found HTTP/HTTPS unsubscribe link for email from: {from_email}, Subject: {subject}")
             return http_link.group(1), from_email, to_email, ''
         mailto_link = re.search(r'(?i)<mailto:([^>]+)>', list_unsubscribe)
-        if mailto_link:
+        if mailto_link and args.email:
             logger.info(f"Found mailto unsubscribe link for email from: {from_email}, Subject: {subject}")
             send_unsubscribe_email(mailto_link.group(1), to_email)
             return mailto_link.group(1), from_email, to_email, ''
@@ -255,25 +255,25 @@ def send_unsubscribe_email(mailto_link, to_email):
     # Gmail SMTP server settings
     smtp_server = 'smtp.gmail.com'
     smtp_port = 587
-    smtp_user = 'your_email@gmail.com'
+    smtp_user = to_email  # Use the same email address as the original email was sent to
     smtp_password = 'your_app_specific_password'
 
     # Create the email message
     msg = MIMEMultipart()
     msg['From'] = smtp_user
-    msg['To'] = to_email
+    msg['To'] = mailto_link.split(':')[1]
     msg['Subject'] = 'Unsubscribe Request'
 
-    body = "Please unsubscribe me from your mailing list."
+    body = "unsubscribe"
     msg.attach(MIMEText(body, 'plain'))
 
     try:
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(smtp_user, smtp_password)
-        server.sendmail(smtp_user, to_email, msg.as_string())
+        server.sendmail(smtp_user, msg['To'], msg.as_string())
         server.quit()
-        logger.info(f"Successfully sent unsubscribe email to {to_email}")
+        logger.info(f"Successfully sent unsubscribe email to {msg['To']}")
     except Exception as e:
         logger.error(f"Failed to send unsubscribe email: {e}")
 
@@ -465,6 +465,7 @@ if __name__ == '__main__':
     parser.add_argument('--days', type=int, default=DEFAULT_DAYS_TO_FETCH, help='Number of days to fetch emails for')
     parser.add_argument('--playwright', action='store_true', help='Enable Playwright for browser automation')
     parser.add_argument('--skyvern', action='store_true', help='Enable Skyvern for unsubscription automation')
+    parser.add_argument('--email', action='store_true', help='Enable sending unsubscribe emails')
     args = parser.parse_args()
 
     if args.debug:
