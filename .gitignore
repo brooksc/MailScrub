@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Tooling
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+
+# Logs and debug output
+*.log
+debug.log
+log.txt
+std.out
+
+# Demo recording output (tape is committed, gif is committed)
+# demo.gif is intentionally tracked
+
+# MailScrub runtime data — never commit these
+*.db
+.mailscrub/
+data/credentials/
+data/tokens/
+config/config.yaml
+config/config.json
+
+# Credentials — belt and suspenders
+credentials.json
+token*.json
+*_credentials.json
+*_client.json
+client_secret*.json
+
+# Allow test fixtures (contain only fake placeholder values)
+!tests/test_credentials.json
+!tests/test_token.json
+
+# direnv (local developer tool, not needed by contributors)
+.envrc
+
+# Editor
+.cursor*
+.cursorignore
+.idea/
+.vscode/

@@ -1,0 +1,9 @@
+{
+    "token": "test_token",
+    "refresh_token": "test_refresh_token",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "client_id": "test_client_id",
+    "client_secret": "test_client_secret",
+    "scopes": ["https://www.googleapis.com/auth/gmail.modify"],
+    "expiry": "2024-12-31T23:59:59.999Z"
+} 

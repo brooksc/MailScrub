@@ -1,0 +1,38 @@
+[
+  {
+    "sender_name": "Blinkist <hello@mail.blinkist.com>",
+    "domain": "blinkist.com",
+    "subject": "Your Daily Read",
+    "total": 3,
+    "unread": 2,
+    "unread_percent": 66.66666666666666,
+    "domain_total": 1,
+    "domain_unread_percent": 100.0,
+    "is_new": true,
+    "has_unsubscribe": true
+  },
+  {
+    "sender_name": "Amazon.com <order-update@amazon.com>",
+    "domain": "amazon.com",
+    "subject": "Your Amazon.com order",
+    "total": 3,
+    "unread": 2,
+    "unread_percent": 66.66666666666666,
+    "domain_total": 1,
+    "domain_unread_percent": 0.0,
+    "is_new": true,
+    "has_unsubscribe": true
+  },
+  {
+    "sender_name": "AI News <ainews@buttondown.email>",
+    "domain": "buttondown.email",
+    "subject": "[AINews] Daily Update",
+    "total": 3,
+    "unread": 2,
+    "unread_percent": 66.66666666666666,
+    "domain_total": 1,
+    "domain_unread_percent": 100.0,
+    "is_new": true,
+    "has_unsubscribe": true
+  }
+]

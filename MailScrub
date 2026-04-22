@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""MailScrub entry point."""
+
+import argparse
+import logging
+from datetime import datetime
+from pathlib import Path
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+
+from src.di.container import Container
+from src.infrastructure.config import ConfigManager
+
+console = Console()
+
+
+def _print_welcome() -> None:
+    console.print(Panel.fit(
+        "[bold cyan]Welcome to MailScrub[/bold cyan]\n\n"
+        "MailScrub finds every newsletter and subscription email in your Gmail\n"
+        "and lets you unsubscribe or delete them in bulk from a fast terminal UI.\n\n"
+        "[bold]What's happening now:[/bold]\n"
+        "  • Fetching the [italic]headers[/italic] of matching emails from Gmail\n"
+        "    (sender, subject, date — [italic]not[/italic] message bodies)\n"
+        "  • Saving them to a local SQLite database\n"
+        "  • Future launches will only fetch new mail — this full sync is once-only\n\n"
+        "[bold]Why wait?[/bold]\n"
+        "  The more history MailScrub has, the better it can surface senders\n"
+        "  you've forgotten about. A few minutes now saves hours of manual\n"
+        "  unsubscribing later.\n\n"
+        "[dim]Privacy: nothing is sent anywhere. All data stays on your machine.[/dim]",
+        title="[bold]First Run[/bold]",
+        border_style="cyan",
+    ))
+    console.print()
+
+
+def run_sync(container: Container, full_sync: bool) -> bool:
+    """Sync Gmail to local store. Returns True if completed without interruption."""
+    store = container.message_store
+    syncer = container.gmail_syncer
+
+    last_sync = store.get_last_sync_at()
+    is_first_run = last_sync is None and store.count() == 0
+
+    if is_first_run or full_sync:
+        _print_welcome()
+    else:
+        when = datetime.fromtimestamp(last_sync or 0).strftime("%Y-%m-%d %H:%M")
+        console.print(f"[dim]Last sync: {when} — checking for new messages…[/dim]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Syncing…", total=None)
+
+        def on_progress(fetched: int, total: int) -> None:
+            progress.update(task, completed=fetched, total=total,
+                            description="Syncing messages…")
+
+        result = syncer.sync(full_sync=full_sync, on_progress=on_progress)
+
+    if result.interrupted:
+        console.print(
+            f"[yellow]Sync interrupted — saved {result.fetched} of "
+            f"{result.total_new} new messages. Will resume next run.[/yellow]"
+        )
+        return False
+    elif result.fetched > 0:
+        console.print(f"[green]✓[/green] Synced {result.fetched} new message(s). "
+                      f"{store.count()} total in local store.")
+    else:
+        console.print(f"[dim]No new messages. {store.count()} in local store.[/dim]")
+    return True
+
+
+def _maybe_migrate_legacy(cfg: ConfigManager) -> None:
+    """One-time migration: move token.json and mailscrub.db to per-account paths."""
+    if cfg.get_accounts():
+        return
+
+    from src.infrastructure.config import _BASE_DIR
+    from src.infrastructure.gmail import GmailRepository
+
+    token_dir = _BASE_DIR / "tokens"
+    legacy_token = token_dir / "token.json"
+    if not legacy_token.exists():
+        return
+
+    console.print("[dim]Migrating to per-account storage…[/dim]")
+    try:
+        repo = GmailRepository(cfg)
+        repo._initialize_service()
+        email = repo.get_primary_email()
+
+        new_token = token_dir / f"{email}.json"
+        legacy_token.rename(new_token)
+
+        legacy_db = _BASE_DIR / "mailscrub.db"
+        new_db = _BASE_DIR / f"{email}.db"
+        if legacy_db.exists() and not new_db.exists():
+            legacy_db.rename(new_db)
+
+        cfg.add_account(email)
+        console.print(f"[green]✓[/green] Migrated as [bold]{email}[/bold]")
+    except Exception as e:
+        console.print(f"[yellow]Migration skipped, using legacy paths:[/yellow] {e}")
+
+
+def _pick_account(accounts: dict) -> str:
+    """Show a numbered menu and return the chosen email."""
+    emails = list(accounts)
+    console.print("[bold]Select account:[/bold]")
+    for i, email in enumerate(emails, 1):
+        tag = " [dim](default)[/dim]" if accounts[email].get("is_default") else ""
+        console.print(f"  [bold cyan]{i}[/bold cyan]  {email}{tag}")
+    console.print()
+    while True:
+        try:
+            raw = console.input("[dim]Enter number (or q to quit):[/dim] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            raise SystemExit(0)
+        if raw.lower() == "q":
+            raise SystemExit(0)
+        if raw.isdigit():
+            idx = int(raw) - 1
+            if 0 <= idx < len(emails):
+                return emails[idx]
+        console.print(f"[yellow]Please enter a number between 1 and {len(emails)}.[/yellow]")
+
+
+def _resolve_user(args_user: str | None, args_new: bool, cfg: ConfigManager) -> str | None:
+    """Return the account email to use, or None for legacy single-account mode."""
+    if args_new:
+        return None  # --new doesn't need a pre-existing user
+    if args_user:
+        accounts = cfg.get_accounts()
+        if accounts and args_user not in accounts:
+            console.print(f"[yellow]Unknown account:[/yellow] {args_user}")
+            console.print("Registered accounts:")
+            for email in accounts:
+                tag = " [dim](default)[/dim]" if accounts[email].get("is_default") else ""
+                console.print(f"  {email}{tag}")
+            raise SystemExit(1)
+        return args_user
+    accounts = cfg.get_accounts()
+    if len(accounts) > 1:
+        return _pick_account(accounts)
+    return cfg.get_default_account()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="MailScrub - Gmail subscription manager")
+    parser.add_argument("-n", "--new", action="store_true", help="Add or re-authenticate a Gmail account")
+    parser.add_argument("-u", "--user", help="Gmail account to use (e.g. you@gmail.com)")
+    parser.add_argument("-a", "--all", action="store_true", dest="show_all",
+                        help="Show all messages including previously seen")
+    parser.add_argument("-l", "--list", action="store_true", dest="list_mode",
+                        help="List emails and exit")
+    parser.add_argument("-c", "--config", help="Config file path")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--testing", action="store_true", help="Enable testing mode")
+    parser.add_argument("--console", action="store_true", help="Use legacy console UI")
+    parser.add_argument("--full-sync", action="store_true", dest="full_sync",
+                        help="Wipe local cache and re-download all messages")
+    parser.add_argument("--no-sync", action="store_true", dest="no_sync",
+                        help="Skip sync and launch TUI immediately (uses cached data)")
+    parser.add_argument("--read-only", action="store_true", dest="read_only",
+                        help="Request read-only Gmail access (disables unsubscribe/delete)")
+    args = parser.parse_args()
+
+    log_dir = Path.home() / ".config" / "mailscrub"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format=fmt)
+    else:
+        logging.basicConfig(level=logging.WARNING, format=fmt)
+        file_handler = logging.FileHandler(log_dir / "debug.log", mode="w")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter(fmt))
+        logging.getLogger().addHandler(file_handler)
+
+    # Resolve account before building the container so per-user paths are set
+    cfg = ConfigManager(args.config)
+    if not args.new:
+        _maybe_migrate_legacy(cfg)
+    try:
+        user = _resolve_user(args.user, args.new, cfg)
+    except SystemExit:
+        return
+
+    container = Container(config_path=args.config, user=user)
+    container.init_infrastructure()
+    container.init_services()
+
+    # --new: OAuth flow → register account
+    if args.new:
+        try:
+            email = container.gmail_repo.initialize_new_account()
+            cfg.add_account(email)
+            console.print(f"[green]✓[/green] Authenticated as [bold]{email}[/bold]")
+            console.print(f"  Run [bold]./MailScrub --user {email}[/bold] to use this account,")
+            console.print("  or just [bold]./MailScrub[/bold] if it's your only account.")
+        except Exception as e:
+            console.print(f"[red]Authentication failed:[/red] {e}")
+        return
+
+    # Validate credentials before sync
+    try:
+        container.gmail_repo._initialize_service()
+    except Exception as e:
+        if "No valid credentials found" in str(e):
+            creds_path = Path.home() / ".config" / "mailscrub" / "credentials" / "credentials.json"
+            console.print(
+                f"[red]No Gmail credentials found.[/red]\n\n"
+                f"Place your OAuth client file at:\n"
+                f"  [bold]{creds_path}[/bold]\n\n"
+                f"Then run:  [bold]./MailScrub --new[/bold]\n\n"
+                f"See README.md for step-by-step Google Cloud setup instructions."
+            )
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        return
+
+    # Detect read-only mode from granted token scopes
+    read_only = container.gmail_repo.is_read_only
+    if read_only:
+        console.print(
+            "[yellow]Read-only mode:[/yellow] unsubscribe and delete are disabled.\n"
+            "Re-run with [bold]--new[/bold] and grant full access to enable them."
+        )
+
+    use_console = args.console or args.list_mode
+    if not use_console and not args.no_sync:
+        run_sync(container, full_sync=args.full_sync)
+
+    if use_console:
+        container.ui.run(
+            list_mode=args.list_mode,
+            show_all=args.show_all,
+            new=False,
+            user=args.user,
+            testing=args.testing,
+        )
+    else:
+        container.tui._show_all = args.show_all
+        container.tui._read_only = read_only
+        container.tui.run()
+
+
+if __name__ == "__main__":
+    main()
