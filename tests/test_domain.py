@@ -60,6 +60,25 @@ def test_domain_service_normalize_unknown():
     assert svc.normalize_domain("unknown.com") == "unknown.com"
 
 
+def test_domain_service_normalize_email_address_input():
+    """@ in input should split and match the domain part."""
+    svc = DomainService()
+    assert svc.normalize_domain("store-news@amazon.com") == "amazon.com"
+
+
+def test_domain_service_normalize_email_unknown_domain():
+    svc = DomainService()
+    assert svc.normalize_domain("user@unknown-brand.com") == "user@unknown-brand.com"
+
+
+def make_message_named(domain: str, email: str, display_name: str, idx: int = 0) -> EmailMessage:
+    sender = EmailSender(display_name=display_name, email=email, domain=domain)
+    return EmailMessage(
+        id=f"msg{idx}", sender=sender, subject="S",
+        received_at=datetime(2024, 1, 1), is_unread=False,
+    )
+
+
 def test_domain_service_group_messages():
     svc = DomainService()
     messages = [
@@ -71,6 +90,34 @@ def test_domain_service_group_messages():
     domains = [g.domain for g in groups]
     assert "example.com" in domains
     assert "other.com" in domains
+
+
+def test_group_messages_shared_platform_splits_by_email():
+    """Multiple distinct display names on one domain → one group per sender email."""
+    svc = DomainService()
+    msgs = [
+        make_message_named("substack.com", "newsletter-a@substack.com", "Newsletter A", idx=0),
+        make_message_named("substack.com", "newsletter-a@substack.com", "Newsletter A", idx=1),
+        make_message_named("substack.com", "newsletter-b@substack.com", "Newsletter B", idx=2),
+    ]
+    groups = svc.group_messages(msgs)
+    assert len(groups) == 2
+    domains = {g.domain for g in groups}
+    assert "newsletter-a@substack.com" in domains
+    assert "newsletter-b@substack.com" in domains
+
+
+def test_group_messages_single_display_name_stays_one_group():
+    """Same display name across multiple sending addresses → stays as one group."""
+    svc = DomainService()
+    msgs = [
+        make_message_named("amazon.com", "store-news@amazon.com", "Amazon", idx=0),
+        make_message_named("amazon.com", "payments@amazon.com", "Amazon", idx=1),
+        make_message_named("amazon.com", "marketplace@amazon.com", "Amazon", idx=2),
+    ]
+    groups = svc.group_messages(msgs)
+    assert len(groups) == 1
+    assert groups[0].statistics.total_count == 3
 
 
 def test_domain_service_group_messages_sorted_by_count():

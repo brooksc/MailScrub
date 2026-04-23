@@ -265,7 +265,8 @@ class GmailRepository(IMessageRepository):
                         self._service.users().messages().get(
                             userId='me', id=mid, format='metadata',
                             metadataHeaders=['From', 'Subject', 'Date',
-                                             'List-Unsubscribe', 'List-Unsubscribe-Post'],
+                                             'List-Unsubscribe', 'List-Unsubscribe-Post',
+                                             'Delivered-To', 'To'],
                         ),
                         request_id=mid,
                     )

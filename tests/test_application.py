@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from src.application.use_cases import ListMessagesUseCase, UnsubscribeUseCase
 from src.domain.models.message import EmailMessage
 from src.domain.models.sender import EmailSender
+from src.domain.models.statistics import GroupStatistics, MessageStatistics
 
 
 def make_message(idx: int = 0, is_unread: bool = False, unsubscribe_link=None) -> EmailMessage:
@@ -99,8 +100,9 @@ def test_unsubscribe_use_case_success(
     use_case.execute("msg0")
 
     unsubscribe_service.process_unsubscribe.assert_called_once_with(msg, from_email=None)
-    presenter.present_success.assert_called_once()
     status_service.mark_domain_seen.assert_called_once_with("example.com")
+    result = use_case.execute_on_message(msg)
+    assert result is True
 
 
 def test_unsubscribe_use_case_failure(
@@ -114,9 +116,23 @@ def test_unsubscribe_use_case_failure(
     use_case = UnsubscribeUseCase(
         message_service, status_service, unsubscribe_service, presenter
     )
-    use_case.execute("msg0")
+    result = use_case.execute_on_message(msg)
 
+    assert result is False
     assert "Failed to unsubscribe" in presenter.present_error.call_args[0][0]
+
+
+def test_unsubscribe_use_case_no_link_returns_false(
+    message_service, status_service, presenter
+):
+    msg = make_message(0, unsubscribe_link=None)
+    unsubscribe_service = MagicMock()
+    use_case = UnsubscribeUseCase(
+        message_service, status_service, unsubscribe_service, presenter
+    )
+    result = use_case.execute_on_message(msg)
+    assert result is False
+    unsubscribe_service.process_unsubscribe.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +163,39 @@ def test_trash_messages_returns_correct_count_on_partial_failure(
     assert count == 2
 
 
+def test_trash_messages_only_removes_succeeded_from_store(
+    message_service, status_service, presenter
+):
+    """Only successfully trashed IDs should be removed from the local store."""
+    message_service.trash_message.side_effect = [True, False, True]
+    store = MagicMock()
+    use_case = UnsubscribeUseCase(
+        message_service, status_service, MagicMock(), presenter, message_store=store
+    )
+
+    use_case.trash_messages(["msg1", "msg2", "msg3"])
+
+    deleted = store.delete_messages.call_args[0][0]
+    assert set(deleted) == {"msg1", "msg3"}
+    excluded = store.add_excluded_ids.call_args[0][0]
+    assert set(excluded) == {"msg1", "msg3"}
+
+
+def test_trash_messages_does_not_touch_store_when_all_fail(
+    message_service, status_service, presenter
+):
+    message_service.trash_message.return_value = False
+    store = MagicMock()
+    use_case = UnsubscribeUseCase(
+        message_service, status_service, MagicMock(), presenter, message_store=store
+    )
+
+    use_case.trash_messages(["msg1", "msg2"])
+
+    store.delete_messages.assert_not_called()
+    store.add_excluded_ids.assert_not_called()
+
+
 def test_trash_messages_empty_list(message_service, status_service, presenter):
     use_case = UnsubscribeUseCase(message_service, status_service, MagicMock(), presenter)
     count = use_case.trash_messages([])
@@ -159,3 +208,101 @@ def test_trash_messages_single_message(message_service, status_service, presente
     use_case = UnsubscribeUseCase(message_service, status_service, MagicMock(), presenter)
     count = use_case.trash_messages(["only-one"])
     assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# ListMessagesUseCase.execute_raw — reappeared detection
+# ---------------------------------------------------------------------------
+
+def _make_group(domain: str, email: str, received_ts: float) -> GroupStatistics:
+    sender = EmailSender(display_name="T", email=email, domain=domain)
+    msg = EmailMessage(
+        id="m1", sender=sender, subject="S",
+        received_at=datetime.fromtimestamp(received_ts),
+        is_unread=False,
+    )
+    stats = MessageStatistics(total_count=1, unread_count=0, domain_total=1, domain_unread_count=0)
+    return GroupStatistics(domain=domain, messages=[msg], statistics=stats)
+
+
+def _make_use_case(domain_service, status_service, presenter, store=None):
+    return ListMessagesUseCase(
+        MagicMock(), domain_service, status_service, presenter, message_store=store
+    )
+
+
+def test_execute_raw_genuine_reappearance(domain_service, status_service, presenter):
+    """Message received AFTER unsubscribe → in reappeared list."""
+    unsub_ts = 1000.0
+    group = _make_group("example.com", "t@example.com", received_ts=unsub_ts + 100)
+    domain_service.group_messages.return_value = [group]
+    status_service.get_unsubscribe_history.return_value = {
+        "example.com": {"sender_email": "t@example.com", "attempted_at": unsub_ts, "unsubscribe_url": ""}
+    }
+    store = MagicMock()
+    store.get_all_messages.return_value = [group.messages[0]]
+    store.get_dismissed_reappeared.return_value = {}
+
+    uc = _make_use_case(domain_service, status_service, presenter, store=store)
+    groups, _, reappeared = uc.execute_raw()
+
+    assert len(reappeared) == 1
+    assert reappeared[0][0].domain == "example.com"
+    assert group not in groups
+
+
+def test_execute_raw_crash_leftover_surfaced_not_flagged(domain_service, status_service, presenter):
+    """Message received BEFORE unsubscribe (crash leftover) → in groups, NOT reappeared."""
+    unsub_ts = 2000.0
+    group = _make_group("example.com", "t@example.com", received_ts=unsub_ts - 100)
+    domain_service.group_messages.return_value = [group]
+    status_service.get_unsubscribe_history.return_value = {
+        "example.com": {"sender_email": "t@example.com", "attempted_at": unsub_ts, "unsubscribe_url": ""}
+    }
+    store = MagicMock()
+    store.get_all_messages.return_value = [group.messages[0]]
+    store.get_dismissed_reappeared.return_value = {}
+
+    uc = _make_use_case(domain_service, status_service, presenter, store=store)
+    groups, _, reappeared = uc.execute_raw()
+
+    assert reappeared == []
+    assert any(g.domain == "example.com" for g in groups)
+
+
+def test_execute_raw_dismissed_suppression(domain_service, status_service, presenter):
+    """Reappeared sender suppressed when dismissed count >= current new-message count."""
+    unsub_ts = 1000.0
+    group = _make_group("example.com", "t@example.com", received_ts=unsub_ts + 100)
+    domain_service.group_messages.return_value = [group]
+    status_service.get_unsubscribe_history.return_value = {
+        "example.com": {"sender_email": "t@example.com", "attempted_at": unsub_ts, "unsubscribe_url": ""}
+    }
+    store = MagicMock()
+    store.get_all_messages.return_value = [group.messages[0]]
+    # Previously dismissed with count=1, same as current new_count → suppress
+    store.get_dismissed_reappeared.return_value = {"t@example.com": 1}
+
+    uc = _make_use_case(domain_service, status_service, presenter, store=store)
+    _, _, reappeared = uc.execute_raw()
+
+    assert reappeared == []
+
+
+def test_execute_raw_history_match_via_sender_email(domain_service, status_service, presenter):
+    """History keyed by sender email (shared-platform groups) is matched correctly."""
+    unsub_ts = 1000.0
+    group = _make_group("substack.com", "news@substack.com", received_ts=unsub_ts + 50)
+    domain_service.group_messages.return_value = [group]
+    # History keyed by sender email, not domain
+    status_service.get_unsubscribe_history.return_value = {
+        "news@substack.com": {"sender_email": "news@substack.com", "attempted_at": unsub_ts, "unsubscribe_url": ""}
+    }
+    store = MagicMock()
+    store.get_all_messages.return_value = [group.messages[0]]
+    store.get_dismissed_reappeared.return_value = {}
+
+    uc = _make_use_case(domain_service, status_service, presenter, store=store)
+    _, _, reappeared = uc.execute_raw()
+
+    assert len(reappeared) == 1

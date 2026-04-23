@@ -124,17 +124,17 @@ class UnsubscribeUseCase:
 
     def trash_messages(self, message_ids: list[str], on_progress=None) -> int:
         """Move messages to Trash. Returns count trashed."""
-        count = 0
+        trashed: list[str] = []
         total = len(message_ids)
         for mid in message_ids:
             if self.message_service.trash_message(mid):
-                count += 1
+                trashed.append(mid)
             if on_progress:
-                on_progress(count, total)
-        if self.message_store and message_ids:
-            self.message_store.delete_messages(message_ids)
-            self.message_store.add_excluded_ids(message_ids)
-        return count
+                on_progress(len(trashed), total)
+        if self.message_store and trashed:
+            self.message_store.delete_messages(trashed)
+            self.message_store.add_excluded_ids(trashed)
+        return len(trashed)
 
     def clear_reappeared(self, sender_emails: list[str]) -> None:
         """Remove senders from unsubscribe history so they never trigger the reappeared dialog."""
@@ -151,18 +151,16 @@ class UnsubscribeUseCase:
                 [message_id], sender_email=sender_email, domain=domain
             )
 
-    def execute_on_message(self, message: EmailMessage, from_email: str | None = None) -> None:
-        """Execute use case on an existing message object.
+    def execute_on_message(self, message: EmailMessage, from_email: str | None = None) -> bool:
+        """Execute use case on an existing message object. Returns True on success.
 
         Implements:
         - UNSUB-1: Unsubscribe processing
         """
-        # Process unsubscribe
         if not message.unsubscribe_link:
             self.presenter.present_error("No unsubscribe link found")
-            return
+            return False
 
-        # Process unsubscribe using the message object
         success = self.unsubscribe_service.process_unsubscribe(message, from_email=from_email)
 
         if success:
@@ -170,17 +168,12 @@ class UnsubscribeUseCase:
                 self.message_store.delete_messages([message.id])
             self.status_service.mark_domain_seen(message.sender.domain)
 
-            # Record so we can detect if the sender ignores the unsubscribe
             from ..domain.services.unsubscribe import UnsubscribeService
             url = UnsubscribeService._extract_url(message.unsubscribe_link or "")
-            # Key by sender email so lookups work for shared-platform groups
-            # (e.g. substack.com newsletters) where g.domain is the email.
             self.status_service.record_unsubscribe(
                 message.sender.email, message.sender.email, url
             )
-
-            self.presenter.present_success(
-                f"Unsubscribed from {message.sender.email} — verify mail stops within a few days"
-            )
         else:
             self.presenter.present_error(f"Failed to unsubscribe from {message.sender.email}")
+
+        return success

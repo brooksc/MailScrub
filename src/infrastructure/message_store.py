@@ -166,7 +166,7 @@ class MessageStore:
             is_unread = "UNREAD" in labels
             unsub = headers.get("List-Unsubscribe", "") or None
             unsub_post = "List-Unsubscribe-Post" in headers
-            to_header = headers.get("To", "")
+            to_header = headers.get("Delivered-To", "") or headers.get("To", "")
             delivered_to = EmailSender.from_header(to_header).email if to_header else ""
             rows.append((
                 msg_id,

@@ -384,6 +384,12 @@ class MailScrubApp(App[None]):
 
     CSS = """
     DataTable { height: 1fr; }
+    #empty_placeholder {
+        height: 1fr;
+        content-align: center middle;
+        color: $text-muted;
+        display: none;
+    }
     #status {
         height: 1;
         background: $panel;
@@ -441,6 +447,7 @@ class MailScrubApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield DataTable(cursor_type="row", zebra_stripes=True)
+        yield Static("", id="empty_placeholder")
         yield Static("Loading…", id="status")
         yield Footer()
 
@@ -533,31 +540,105 @@ class MailScrubApp(App[None]):
                     f"{len(self._groups)} senders · "
                     f"[yellow]{len(reappeared_multi)} ignored your unsubscribe[/yellow]"
                 )
+            elif len(self._groups) == 0 and vm.total_messages == 0:
+                self._set_status("No messages found. Press 'r' to sync.")
+            elif len(self._groups) == 0:
+                self._set_status(
+                    "All done! Nothing left to process. Press 'a' to show all or 'r' to sync.",
+                    kind="success",
+                )
             else:
                 self._set_status(
                     f"{len(self._groups)} sender{'s' if len(self._groups) != 1 else ''} found"
                 )
 
         elif name == "unsubscribe":
-            done, acted_domains = result
+            done, failed, acted_domains, needs_browser, delete = result
             self._groups = [g for g in self._groups if g.domain not in acted_domains]
             self._selected -= set(acted_domains)
             self._rebuild_table()
-            self._set_status(f"Unsubscribed from {done} sender(s).", kind="success")
+
+            parts = []
+            if done:
+                parts.append(f"Unsubscribed from {done} sender(s)")
+            if failed:
+                parts.append(f"{failed} failed")
+            status_base = ". ".join(parts) if parts else ""
+            status_kind = "error" if failed and not done else "success"
+
+            if needs_browser:
+                n = len(needs_browser)
+                s = "s" if n > 1 else ""
+                names = "\n  · ".join(g.domain for g in needs_browser)
+                msg = (
+                    f"{n} sender{s} ha{'ve' if n > 1 else 's'} no unsubscribe link.\n"
+                    f"Open browser tab{s} to unsubscribe manually?\n  · {names}"
+                )
+                browser_domains = {g.domain for g in needs_browser}
+
+                def _browser_cb(
+                    ok,
+                    _nb=needs_browser,
+                    _d=delete,
+                    _bd=browser_domains,
+                    _base=status_base,
+                    _kind=status_kind,
+                    _n=n,
+                    _s=s,
+                ) -> None:
+                    if not ok:
+                        suffix = f"{_n} sender{_s} left in list (no unsubscribe link)."
+                        self._set_status(
+                            f"{_base}. {suffix}" if _base else suffix, kind=_kind
+                        )
+                        return
+                    for g in _nb:
+                        email = g.messages[0].sender.email if g.messages else None
+                        if email:
+                            webbrowser.open(
+                                f"https://mail.google.com/mail/u/0/#search/from:{email}"
+                            )
+                    self._groups = [g for g in self._groups if g.domain not in _bd]
+                    self._selected -= _bd
+                    self._rebuild_table()
+                    tab_note = f"Opened {_n} browser tab{_s}."
+                    if _d:
+                        all_ids = [m.id for g in _nb for m in g.messages]
+                        final_status = f"{_base}. {tab_note}" if _base else tab_note
+                        def _del_worker(_ids=all_ids, _st=final_status, _k=_kind) -> str:
+                            self._unsubscribe.trash_messages(_ids)
+                            return _st
+                        self.run_worker(_del_worker, thread=True, name="browser_delete")
+                    else:
+                        self._set_status(
+                            f"{_base}. {tab_note}" if _base else tab_note, kind=_kind
+                        )
+
+                self.push_screen(ConfirmScreen(msg), callback=_browser_cb)
+            else:
+                suffix = " All done!" if not self._groups else ""
+                self._set_status((status_base or "Done.") + suffix, kind=status_kind)
+
+        elif name == "browser_delete":
+            status: str = result
+            suffix = " All done!" if not self._groups else ""
+            self._set_status(status + suffix, kind="success")
 
         elif name == "ignore":
             done, acted_domains = result
             self._groups = [g for g in self._groups if g.domain not in acted_domains]
             self._selected -= set(acted_domains)
             self._rebuild_table()
-            self._set_status(f"Ignored {done} sender(s).", kind="success")
+            suffix = " All done!" if not self._groups else ""
+            self._set_status(f"Ignored {done} sender(s).{suffix}", kind="success")
 
         elif name == "delete":
             acted_domains: set[str] = result
             self._groups = [g for g in self._groups if g.domain not in acted_domains]
             self._selected -= acted_domains
             self._rebuild_table()
-            self._set_status("Deleted.", kind="success")
+            suffix = " All done!" if not self._groups else ""
+            self._set_status(f"Deleted.{suffix}", kind="success")
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
         if action in ("delete", "unsubscribe", "ignore") and self._read_only:
@@ -585,6 +666,23 @@ class MailScrubApp(App[None]):
         table = self.query_one(DataTable)
         table.clear()
         sorted_groups = self._sorted_groups()
+
+        ph = self.query_one("#empty_placeholder", Static)
+        if sorted_groups:
+            table.display = True
+            ph.display = False
+        else:
+            table.display = False
+            ph.display = True
+            store_count = self._message_store.count() if self._message_store else 0
+            if store_count == 0:
+                ph.update("No messages found.\n\nPress [bold]r[/bold] to sync.")
+            else:
+                ph.update(
+                    "All done! Nothing left to process.\n\n"
+                    "Press [bold]a[/bold] to show all  ·  [bold]r[/bold] to sync"
+                )
+
         vm = MessageTableViewModel(sorted_groups, self._seen_domains)
         for group, row in zip(sorted_groups, vm.rows):
             sel = Text("[x]", style="cyan") if group.domain in self._selected else Text("[ ]")
@@ -783,31 +881,46 @@ class MailScrubApp(App[None]):
         if not targets:
             self._set_status("Nothing to unsubscribe from.", kind="error")
             return
+        can_unsub = [g for g in targets if any(m.has_unsubscribe for m in g.messages)]
+        needs_browser = [g for g in targets if not any(m.has_unsubscribe for m in g.messages)]
         names = self._format_target_names(targets)
         warning = self._alias_warning(targets)
         msg = f"Unsubscribe from:\n  · {names}?{warning}"
-        acted_domains = {g.domain for g in targets}
         self.push_screen(
             ConfirmScreen(msg),
-            callback=lambda ok: self._confirm_delete_after_unsub(targets, acted_domains, ok),
+            callback=lambda ok: self._confirm_delete_after_unsub(can_unsub, needs_browser, ok),
         )
 
     def _confirm_delete_after_unsub(
-        self, targets: list[GroupStatistics], acted_domains: set[str], ok: bool | None
+        self,
+        can_unsub: list[GroupStatistics],
+        needs_browser: list[GroupStatistics],
+        ok: bool | None,
     ) -> None:
         if not ok:
             return
-        total = sum(len(g.messages) for g in targets)
-        self.push_screen(
-            ConfirmScreen(f"Also delete {total} email{'s' if total != 1 else ''}?"),
-            callback=lambda delete: self._exec_unsubscribe(targets, acted_domains, delete),
-        )
+        acted_domains = {g.domain for g in can_unsub}
+        if can_unsub:
+            total = sum(len(g.messages) for g in can_unsub)
+            self.push_screen(
+                ConfirmScreen(f"Also delete {total} email{'s' if total != 1 else ''}?"),
+                callback=lambda delete: self._exec_unsubscribe(
+                    can_unsub, needs_browser, acted_domains, delete
+                ),
+            )
+        else:
+            self._exec_unsubscribe(can_unsub, needs_browser, acted_domains, False)
 
     def _exec_unsubscribe(
-        self, targets: list[GroupStatistics], acted_domains: set[str], delete: bool | None
+        self,
+        can_unsub: list[GroupStatistics],
+        needs_browser: list[GroupStatistics],
+        acted_domains: set[str],
+        delete: bool | None,
     ) -> None:
-        total_unsub = len(targets)
-        screen = ProgressScreen(f"Unsubscribing 0/{total_unsub}…")
+        total_unsub = len(can_unsub)
+        label = f"Unsubscribing 0/{total_unsub}…" if total_unsub else "Processing…"
+        screen = ProgressScreen(label)
 
         def _resolve_from(msg) -> str | None:
             if not self._gmail_repo or not msg.delivered_to:
@@ -823,31 +936,38 @@ class MailScrubApp(App[None]):
 
         def worker() -> tuple:
             done = 0
-            for i, group in enumerate(targets, 1):
+            failed = 0
+            for i, group in enumerate(can_unsub, 1):
                 self.call_from_thread(screen.update, f"Unsubscribing {i}/{total_unsub}…")
                 unsub_msg = next((m for m in group.messages if m.has_unsubscribe), None)
                 if unsub_msg:
                     try:
                         from_email = _resolve_from(unsub_msg)
-                        self._unsubscribe.execute_on_message(unsub_msg, from_email=from_email)
-                        all_ids = [m.id for m in group.messages]
-                        remaining = [mid for mid in all_ids if mid != unsub_msg.id]
-                        if self._unsubscribe.message_store:
-                            if remaining:
-                                self._unsubscribe.message_store.delete_messages(remaining)
-                            self._unsubscribe.message_store.add_excluded_ids(all_ids)
-                        done += 1
+                        success = self._unsubscribe.execute_on_message(
+                            unsub_msg, from_email=from_email
+                        )
+                        if success:
+                            all_ids = [m.id for m in group.messages]
+                            remaining = [mid for mid in all_ids if mid != unsub_msg.id]
+                            if self._unsubscribe.message_store:
+                                if remaining:
+                                    self._unsubscribe.message_store.delete_messages(remaining)
+                                self._unsubscribe.message_store.add_excluded_ids(all_ids)
+                            done += 1
+                        else:
+                            failed += 1
                     except Exception as e:
                         logger.warning(f"Unsubscribe failed for {group.domain}: {e}")
-            if delete:
-                all_ids = [m.id for g in targets for m in g.messages]
+                        failed += 1
+            if delete and can_unsub:
+                all_ids = [m.id for g in can_unsub for m in g.messages]
                 total_del = len(all_ids)
                 def _del_progress(trashed: int, total: int) -> None:
                     self.call_from_thread(screen.update, f"Deleting {trashed}/{total} emails…")
                 _del_progress(0, total_del)
                 self._unsubscribe.trash_messages(all_ids, on_progress=_del_progress)
             self.call_from_thread(screen.dismiss)
-            return done, acted_domains
+            return done, failed, acted_domains, needs_browser, delete
 
         self.push_screen(screen)
         self.run_worker(worker, exclusive=False, thread=True, name="unsubscribe")
