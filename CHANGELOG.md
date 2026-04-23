@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.1] — 2026-04-23
+
+## [0.1.0] — 2026-04-22
+
+Initial public release.
+
+---
 
 ### Bug Fixes
 
